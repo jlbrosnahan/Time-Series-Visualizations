@@ -1,7 +1,7 @@
 # Time-Series in R Studio
 Visualizing Time Series Data
 
-* Please see TimeSeries Markdown.md document above for full analysis
+* Please see 'TimeSeries Markdown.md' document above for full analysis
 
 ## Background
 We have been asked by a law firm to conduct an in-depth analysis of power consumption data for a client's residential home. The law firm's client claims to have not been occupying a specific residence at the time of an undisclosed event during Summer of 2008. Energy use records will be used to provide evidence on whether or not residence was occupied from July-September 2008.
