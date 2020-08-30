@@ -1,0 +1,582 @@
+---
+title: "Time Series Analysis: Visualizing Residential Energy Use Patterns"
+author: "Jennifer Brosnahan"
+date: "8/29/2020"
+output:
+  html_document: 
+    theme: lumen
+    highlight: haddock
+    keep_md: yes
+---
+
+## Background
+#### We have been asked by a law firm to conduct an in-depth analysis of power consumption data for a client's residential home. The law firm's client claims to have not been occupying a specific residence at the time of an undisclosed event during Summer of 2008. Energy use records will be used to provide evidence on whether or not residence was occupied from July-September 2008.
+
+## Objective
+#### Our objectives are to conduct an in-depth analysis of energy records from 2007 to 2010 for client residence and to answer the law firm's question, 'Was client residence occupied during the Summer of 2008?' We will achieve this by visualizing energy use patterns on high level (up to 3-years) to determine overall energy use patterns as well as a microscopic level during Summer of 2008.
+
+## Data Description
+#### Data consists of energy consumed per minute for 3 different sub-meters in residential home in Seaux, France between December 2006 and November 2010 (47 months). It contains over 2 million minute observations of electric power consumption. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(openxlsx)
+
+Data_Table <- read.xlsx(file.path('C:/Users/jlbro/OneDrive/Energy Visualizations', 'Data Table.xlsx'))
+
+kable(Data_Table) %>% 
+  kable_styling(bootstrap_options = c('striped','hover'), full_width = FALSE)
+```
+#### Source: UCI Machine Learning Repository 'Individual household electric power consumption' data set
+
+#### Submeter description:
+
+  + Submeter 1: Kitchen (dishwasher, microwave, over)
+  + Submeter 2: Laundry (washing machine, dryer, refridgerator, light)
+  + Submeter 3: Electric water heater and air conditioner
+
+## Load libraries
+```{r, warning=FALSE, message=FALSE}
+library(RMySQL)
+library(lubridate)
+library(tidyverse)
+library(openxlsx)
+library(knitr)
+library(ggplot2)
+library(plotly)
+library(ggthemes)
+library(scales)
+library(imputeTS)
+```
+
+## Load data
+```{r, warning=FALSE, message=FALSE}
+# establish SQL connection
+con = dbConnect(MySQL(), user = 'deepAnalytics',
+                password='Sqltask1234!', dbname='dataanalytics2018',
+                host = 'data-analytics-2018.cbrosir2cswx.us-east-1.rds.amazonaws.com')
+
+## list tables in database
+dbListTables(con)
+```
+```{r}
+## list attributes in 'yr_2006' table
+dbListFields(con, 'yr_2006')
+```
+```{r}
+## Select attributes needed for analysis
+yr_2006 <- dbGetQuery(con, 'SELECT Date, Time, Sub_metering_1, Sub_metering_2, Sub_metering_3 FROM yr_2006')
+yr_2007 <- dbGetQuery(con, 'SELECT Date, Time, Sub_metering_1, Sub_metering_2, Sub_metering_3 FROM yr_2007')
+yr_2008 <- dbGetQuery(con, 'SELECT Date, Time, Sub_metering_1, Sub_metering_2, Sub_metering_3 FROM yr_2008')
+yr_2009 <- dbGetQuery(con, 'SELECT Date, Time, Sub_metering_1, Sub_metering_2, Sub_metering_3 FROM yr_2009')
+yr_2010 <- dbGetQuery(con, 'SELECT Date, Time, Sub_metering_1, Sub_metering_2, Sub_metering_3 FROM yr_2010')
+```
+
+## Understand the data
+```{r, results='hide'}
+## check structure
+str(yr_2006)  
+str(yr_2007)  
+str(yr_2008)   
+str(yr_2009) 
+str(yr_2010)  
+
+## check head and tail
+head(yr_2006) 
+tail(yr_2006) # contains 2 weeks of data
+head(yr_2007) 
+tail(yr_2007) # contains 1 full year
+head(yr_2008) 
+tail(yr_2008) # contains 1 full year
+head(yr_2009) 
+tail(yr_2009) # contains 1 full year
+head(yr_2010) 
+tail(yr_2010) # contains 11 months
+```
+
+## Combine datasets
+```{r}
+## include only necessary years
+subMeters <- bind_rows(yr_2007, yr_2008, yr_2009)
+
+## check structure
+str(subMeters)
+```
+```{r}
+## check head and tail, ensuring dates are in correct order
+head(subMeters)
+tail(subMeters)
+```
+
+## Preprocessing
+```{r, message=FALSE}
+## combine Date and Time attributes into a new attribute column
+subMeters <- cbind(subMeters, paste(subMeters$Date, subMeters$Time), stringsAsFactors = FALSE)
+
+## change column name
+colnames(subMeters)[6] <- 'DateTime'
+
+## move DateTime closer to front of data frame
+subMeters <- subMeters %>% relocate(DateTime, .before = Sub_metering_1)
+
+## check structure
+str(subMeters)
+```
+
+#### So far so good
+
+## Date and Time manipulation
+```{r, warning=FALSE, message=FALSE}
+## convert DateTime from character to POSIXct (number of seconds since January 1, 1970)
+subMeters$DateTime <- as.POSIXct(subMeters$DateTime, '%Y/%m/%d %H:%M:%S')
+
+## add time zone from France
+attr(subMeters$DateTime, 'tzone') <- 'Europe/Paris'
+
+## delete old Date and Time columns to create new ones columns with correct time zone
+subMeters$Date <- NULL
+subMeters$Time <- NULL
+
+## Create new Date column with correct time zone
+subMeters$Date <- date(subMeters$DateTime)
+subMeters$Time <- format(subMeters$DateTime, '%H:%M:%S')
+
+## check structure
+str(subMeters)
+```
+```{r}
+## move Date and Time to more strategic location
+subMeters <- subMeters %>% relocate(Date, .before = Sub_metering_1)
+subMeters <- subMeters %>% relocate(Time, .before = Sub_metering_1)
+
+## change name of certain columns
+subMeters <- subMeters %>% rename(sub1 = Sub_metering_1)
+subMeters <- subMeters %>% rename(sub2 = Sub_metering_2)
+subMeters <- subMeters %>% rename(sub3 = Sub_metering_3)
+
+## lubridate to create new attributes from 'DateTime' for analysis
+subMeters$year <- year(subMeters$DateTime)
+subMeters$quarter <- quarter(subMeters$DateTime)
+subMeters$month <- month(subMeters$DateTime)
+subMeters$week <- isoweek(subMeters$DateTime)
+subMeters$wday <- wday(subMeters$DateTime)
+subMeters$day <- day(subMeters$DateTime)
+subMeters$hour <- hour(subMeters$DateTime)
+subMeters$minute <- minute(subMeters$DateTime)
+
+## move Date and Time to more strategic location
+subMeters <- subMeters %>% relocate(sub1, .after = minute)
+subMeters <- subMeters %>% relocate(sub2, .after = sub1)
+subMeters <- subMeters %>% relocate(sub3, .after = sub2)
+
+## check structure
+str(subMeters)
+```
+#### All looks good
+
+## Check for missing data
+```{r}
+## group by date, obtain the count, and turn into data frame
+missing_datetime <- subMeters %>% count(Date)
+incomplete_data <- data.frame(table(missing_datetime$n))
+incomplete_data
+```
+
+```{r}
+## filter for all days that do not have 1440 hours
+missing_time <- missing_datetime %>% filter(n !=1440) 
+missing_time
+```
+
+### Observations: Out of 60 dates not at 1440 total minutes/day, 3 dates contain 1500 minutes, and 57 dates have <1440 minutes/day. 25 days are missing 1 minute, and 15 days are missing 2-5 minutes. During time period of concern (July-Sept 2008), only 4 total minutes are missing on 3 separate days. Due to insignificant number of missing minutes during primary time focus, missing values were not imputed in dataset.
+
+## Initial EDA for 2007-2010 data
+```{r}
+### Viewing summary statistics
+sum(subMeters$sub1) # 1,819,989 total kilowatts used
+sum(subMeters$sub2) # 2,108,410 total kilowatts used
+sum(subMeters$sub3) # 9.758,843 total kilowatts used
+
+summary(subMeters)
+```
+### Summary of Energy Use by Submeter from 2007 to 2010: 
+
+* Sub-meter 1: Kitchen
+  + Least total energy used (1,819,989 Watts)
+  + Average 1.16 Watts per minute
+  + Largest energy range (0-82 Watts)
+* Sub-meter 2: Laundry
+  + Total energy used (2,108,410 Watts)
+  + Average 1.34 Watts per minute
+  + Energy range (0-78 Watts)
+* Sub-meter 3: Water Heater & AC
+  + Most total energy used (9,758,843 Watts)
+  + Average 6.21 Watts per minute
+  + Smallest energy range (0-32 Watts)
+
+## Data Transformation for In-depth EDA
+```{r, message=FALSE, warning=FALSE}
+
+## summarizing in groups by year, quarter, month, week, day
+QtrlySum <- subMeters %>%
+  group_by(year, quarter) %>% 
+  summarise(across(starts_with('sub'), sum))
+
+QtrlySumGather <- gather(QtrlySum, 'sub1', 'sub2', 'sub3',
+                         key = 'submeter', value = 'amount')
+
+MonthlySum <- subMeters %>%
+  group_by(year, month) %>% 
+  summarise(across(starts_with('sub'), sum))
+
+MonthSumGather <- gather(MonthlySum, 'sub1', 'sub2', 'sub3',
+                         key = 'submeter', value = 'amount')
+
+DailySum <- subMeters %>%
+  group_by(Date, year, quarter, day) %>% 
+  summarise(across(starts_with('sub'), sum))
+
+DailySumGather <- gather(DailySum, 'sub1', 'sub2', 'sub3',
+                         key = 'submeter', value = 'amount')
+
+HourlySum <- subMeters %>% 
+  group_by(Date, month, week, day, hour) %>% 
+  summarise(across(starts_with('sub'), sum))
+
+HourlySumGather <- gather(HourlySum, 'sub1', 'sub2', 'sub3',
+                          key = 'submeter', value = 'amount')
+
+
+AllSumGathered <- gather(subMeters, 'sub1', 'sub2', 'sub3',
+                         key = 'submeter', value = 'amount')
+```
+
+
+## EDA
+### Exploring monthly energy use patterns by year
+```{r}
+## Monthly Sum by Year
+subset(MonthSumGather, year != 2010) %>%
+  ggplot(aes(month, amount, color=submeter)) +
+  geom_line(size = 1) +
+  facet_grid(year~.) +
+  theme_bw() +
+  theme(aspect.ratio = .25,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(0,0,0,6),
+        legend.box.margin=margin(0,-10,-10,0)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter: ', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  scale_x_discrete(limits=c('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Monthly Energy Use by Year')
+```
+
+### Observations
+
+* Water heater and AC consistently use more energy than other submeters across years
+* Seasonal patterns show peak energy use for Water Heater & AC in winter months, with steady decline reaching lows in summer months
+* Sharp decline for all submeters seen in August 2008
+
+### Exploring Summer 2008 dip
+```{r}
+## Daily Sum by Month in Summer 2008
+subset(DailySumGather, year==2008 & quarter == 3) %>%
+  ggplot(aes(Date, amount, color=submeter)) +
+  geom_line(size = 1) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,0)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:  ', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  scale_x_date(labels = date_format('%b %d'), breaks = date_breaks('1 week')) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8)) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Daily Energy Use July - September 2008')
+```
+
+### Observations:
+
+* Notice steep drop in energy use in all submeters from Aug 5-29, 2008
+* Water Heater & AC consistently use more energy than other submeters, even during August time period
+
+### Comparing summer across years to see if 2008 is pattern or anomaly
+```{r}
+## Daily Sum each Summer by year
+subset(DailySumGather, quarter==3) %>%
+  ggplot(aes(Date, amount, color=submeter)) +
+  geom_line(size = .8) +
+  facet_wrap(~year, scales = 'free', nrow = 3, strip.position = 'right') +
+  theme_bw() +
+  theme(aspect.ratio = .25,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,4),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  scale_x_date(labels = date_format('%b %d'), breaks = date_breaks('2 weeks')) +
+  theme(axis.text.x = element_text(hjust = 1, vjust = 1, size = 8)) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Daily Power Use July - September by Year')
+```
+
+### Observations:
+
+* Steep, extended drop in energy use is seen in August 2008 only
+* Water heater & AC consistently use more energy than other submeters across years
+* Less steep drop is seen for short duration beginning of August 2009, but only for few days
+
+
+### Investigating energy use on microscopic level each week and within days in August 2008
+```{r}
+## create hourly use by week 31 in 2008 (July 28 - August 4)
+houseWeek31 <- data.frame(filter(AllSumGathered, year==2008 & week==31 & minute==0))
+
+
+## hourly Sum by Week
+houseWeek31 %>%
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size = .8) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Use July 28 - Aug 4 2008')
+```
+
+### Observations:
+
+* Kitchen: used 4 times in 1 week period, 19-37 Watts/time
+* Laundry: 1 higher use of 35 Watts July 31, otherwise 2-3 Watts used at regular intervals
+* Water Heater & AC: Range of 2-30 Watts used more frequently throughout the week
+
+### Let's explore hourly use the following week. We will do this throughout the rest of August to determine energy use and occupancy status of residence. 
+```{r}
+## create hourly use by week 32 in 2008 (August 4-11)
+houseWeek32 <- data.frame(filter(AllSumGathered, year==2008 & week==32 & minute==0))
+
+
+## hourly Sum by Week
+houseWeek32 %>%
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size = .8) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Use Aug 5 - Aug 11 2008')
+```
+
+### Observations:
+
+* Noticeable different in energy use August 5th on.
+* Kitchen: reveals 1 spike of 39 Watts on Aug 5, with no more use
+* Laundry: 1 spike of 71 Watts late Aug 4. We can see 2-3 Watt intervals rest of week.
+* Water heater & AC: High of 30 Watts occurred on Aug 5, followed by 1-2 Watt regular intervals with 12 Watt spikes about once/day.
+
+### Investigating hourly use the following week in August
+```{r}
+## create hourly use by week 33 in 2008 (August 11-18)
+houseWeek33 <- data.frame(filter(AllSumGathered, year==2008 & week==33 & minute==0))
+
+
+## hourly Sum by Week
+houseWeek33 %>%
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size = .8) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Use Aug 11 - Aug 18 2008')
+```
+
+### Observations:
+
+* Kitchen: No energy use during this time frame
+* Laundry: 1-2 Watt daily intervals, however, also notice time periods of seemingly no energy use
+* Water heater & AC: 1-Watt regular intervals with 12-Watt spikes about once/day.
+
+### Again, we will investigate hourly use the following week
+```{r}
+## create hourly use by week 34 in 2008 (August 18-25)
+houseWeek34 <- data.frame(filter(AllSumGathered, year==2008 & week==34 & minute==0))
+
+
+## hourly Sum by Week
+houseWeek34 %>%
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size = .8) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Use Aug 18 - 25 2008')
+```
+
+### Observations:
+
+* Kitchen: No energy use
+* Laundry: Appears to be no energy used Aug 19, but used other days
+* Water heater & AC: 1 Watt regular daily intervals, with some spikes
+
+### Explore one more week in August, then investigate hourly use on August 19th to see if Laundry was in use or not.
+```{r}
+## create hourly use by week 35 in 2008 (August 25-Sept 1)
+houseWeek35 <- data.frame(filter(AllSumGathered, year==2008 & week==35 & minute==0))
+
+
+## hourly Sum by Week
+houseWeek35 %>%
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size = .8) +
+  theme_bw() +
+  theme(aspect.ratio = .4,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,10)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Use Aug 25 - Sept 1 2008')
+```
+
+### Observations:
+
+* Kitchen: No use until September 1, 2008
+* Laundry and Water heater/AC: Similar pattern from prior week
+
+### Now, let's observe energy use in 10-minute intervals on August 19th to see if in fact Laundry submeter is used
+```{r}
+## create 10-minute interval use for one day within time period in question
+houseDay19 <- data.frame(filter(AllSumGathered, year==2008 & month==8 & day==19 & (minute==0 | minute==10 | minute==20 | minute==30 | minute==40 | minute==50)))
+
+houseDay19 %>% 
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size=.8) +
+  theme_bw() +
+  theme(aspect.ratio = .5,
+        legend.position = 'top',
+        legend.justification = 'left',
+        legend.margin=margin(2,0,0,0),
+        legend.box.margin=margin(0,-10,-10,0)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter:', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Power Use in 10-minute intervals August 19th, 2008')
+
+```
+
+### Observations:
+
+* Reveals laundry is in use, but low 1-2 Watts, same as other days in August. Fridge is connected to laundry submeter, which can easily explain low use at regular intervals
+* Kitchen is not used
+
+### We will compare this day to another day outside of time period in question to compare differences
+
+```{r}
+## create 10 minute interval use for one day outside of time period in question
+houseDay9 <- data.frame(filter(AllSumGathered, year==2008 & month==1 & day==9 & (minute==0 | minute==10 | minute==20 | minute==30 | minute==40 | minute==50)))
+
+houseDay9 %>%  
+  ggplot(aes(DateTime, amount, color=submeter)) +
+  geom_line(size=.8) +
+  theme_bw() +
+  theme(aspect.ratio = .45,
+      legend.position = 'top',
+      legend.justification = 'left',
+      legend.margin=margin(2,0,0,0),
+      legend.box.margin=margin(0,-10,-10,0)) +
+  scale_color_brewer(palette = 'Set1', name = 'Submeter: ', labels = c('Kitchen', 'Laundry', 'Water Heater & AC')) +
+  xlab('\nTime') +
+  ylab('Power (Watt-hours)\n') +
+  ggtitle('Hourly Power Consumption January 9th, 2008')
+```
+
+### Observation:
+
+* Kitchen is in use during dinner time frame
+* Laundry has same 1-2 Watt pattern as Aug 18, 2008
+* Water heater & AC is in much higher use throughout the day
+
+# Summary and Conclusion:
+### Seasonal use patterns reveal peak energy use in winter and low in summer months, with water heater & AC consistently using more across time
+
+### There was a sharp, extended decline for all sub-meters seen from Aug 5th - 31st, 2008
+
+* This decline is atypical of all other time periods
+* No energy was used from kitchen submeter from Aug 6th - 31st, 2008
+* Lower energy use than typically seen in summer from both Laundry and Water Heater/AC submeters
+
+### Recommendation based on evidence from data is that residence was not occupied from August 6th - August 31st, 2008, but was occupied all other days within July-September 2008 time frame. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
