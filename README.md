@@ -26,7 +26,7 @@ Our objectives are to conduct an in-depth analysis of energy records from 2007 t
 
 ![Visual 3](https://github.com/jlbrosnahan/Time-Series-Visualizations/blob/master/Time-Series-Visual-script_files/figure-html/unnamed-chunk-22-1.png)
 
-## Insights and Conclusion
+## Insights and Recommendation
 * Seasonal use patterns reveal peak energy use in winter and low in summer months, with water heater & AC consistently using more across time
 * There was a sharp, extended decline for all sub-meters seen from Aug 5th - 31st, 2008
   + This decline is atypical of all other time periods
