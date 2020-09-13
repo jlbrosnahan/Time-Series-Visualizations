@@ -18,8 +18,11 @@ Our objectives are to conduct an in-depth analysis of energy records from 2007 t
 * Deep analytics
 * Business objectives achieved
 
-## Visualizations
-![Visual 1](https://github.com/jlbrosnahan/Time-Series-Visualizations/blob/master/Time-Series-Visual-script_files/figure-html/unnamed-chunk-18-1.png)
+## Visualization Examples
+
+![Visual 1](https://github.com/jlbrosnahan/Time-Series-Visualizations/blob/master/Time-Series-Visual-script_files/figure-html/unnamed-chunk-16-1.png)
+
+![Visual 2](https://github.com/jlbrosnahan/Time-Series-Visualizations/blob/master/Time-Series-Visual-script_files/figure-html/unnamed-chunk-18-1.png)
 
 
 ## Insights and Conclusion
